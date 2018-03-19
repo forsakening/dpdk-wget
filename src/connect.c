@@ -235,7 +235,25 @@ static void
 connect_with_timeout_callback (void *arg)
 {
   struct cwt_context *ctx = (struct cwt_context *)arg;
+  //ctx->result = connect (ctx->fd, ctx->addr, ctx->addrlen);
+#ifdef DPDKANS
+  int try_connect_count = 5;
+  while (try_connect_count-- && 
+  	     connect (ctx->fd, ctx->addr, ctx->addrlen) < 0 && 
+  	     errno == EINPROGRESS)
+  {
+    if (try_connect_count <= 0)
+		ctx->result = -1;
+    sleep(1);
+    return;
+  }
+
+  ctx->result = 0;
+
+#else
   ctx->result = connect (ctx->fd, ctx->addr, ctx->addrlen);
+#endif
+
 }
 
 /* Like connect, but specifies a timeout.  If connecting takes longer
@@ -683,37 +701,48 @@ int
 select_fd (int fd, double maxtime, int wait_for)
 {
 #ifdef DPDKANS
-	/*add by ans_team, support for epoll*/
-	int epfd = epoll_create(256);    //可处理的最大句柄数256个  
+    /*add by ans_team, support for epoll*/
+    int epfd = epoll_create(256);
     if(epfd < 0)  
     {  
         printf("epoll_create error!\n");  
         return -1;  
     }
-	else
-		printf("DPDK-ANS:epoll_create ok !!!\n");
+    else
+        printf("DPDK-ANS:epoll_create ok !!!\n");
 
-	struct epoll_event ee;
+    struct epoll_event ee = {0};
     int op = EPOLL_CTL_ADD;
+    //ee.events |= EPOLLLT;
     ee.events = 0;
-	if (wait_for & WAIT_FOR_READ)
+    if (wait_for & WAIT_FOR_READ)
     	ee.events |= EPOLLIN;
-	if (wait_for & WAIT_FOR_WRITE)
+    if (wait_for & WAIT_FOR_WRITE)
     	ee.events |= EPOLLOUT;
     ee.data.u64 = 0; /* avoid valgrind warning */
     ee.data.fd = fd;
     if (epoll_ctl(epfd,op,fd,&ee) == -1) 
-	{
-		printf("epoll_ctl error!\n");  
+    {
+	printf("epoll_ctl error!\n");  
         return -1; 
-	}
-	else
-		printf("DPDK-ANS:epoll_ctl ok,fd = %d !!!\n", fd);
+    }
+    else
+	printf("DPDK-ANS:epoll_ctl ok,fd = %d !!!\n", fd);
 
-	int retval = 0;
-	struct epoll_event revs[64]; 
+    int retval = 0;
+    struct epoll_event revs[64]; 
     retval = epoll_wait(epfd,revs,64,(int)maxtime);
-    return retval;
+    if (0 == retval)
+	return -1; // timeout
+    else if (0 > retval)
+	return retval; // eroor
+    else
+    {
+	epoll_ctl(epfd,EPOLL_CTL_DEL,fd,&ee);
+        printf("RECV a epoll !!!\n");
+	return retval;
+    }
+    
 #else
 
   fd_set fdset;
